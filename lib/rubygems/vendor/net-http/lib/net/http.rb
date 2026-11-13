@@ -1709,8 +1709,7 @@ module Gem::Net   #:nodoc:
       if use_ssl?
         if proxy?
           if @proxy_use_ssl
-            proxy_sock = OpenSSL::SSL::SSLSocket.new(s)
-            ssl_socket_connect(proxy_sock, @open_timeout)
+            proxy_sock = ssl_connect_proxy(s, conn_addr)
           else
             proxy_sock = s
           end
@@ -1795,6 +1794,31 @@ module Gem::Net   #:nodoc:
       raise
     end
     private :connect
+
+    # See Net::HTTP#ssl_connect_proxy. This copy is the RubyGems vendor
+    # of net-http and has to authenticate the proxy hop the same way.
+    def ssl_connect_proxy(tcp_sock, address)
+      ctx = OpenSSL::SSL::SSLContext.new
+      params = {verify_mode: OpenSSL::SSL::VERIFY_PEER}
+      params[:ca_file] = @ca_file if @ca_file
+      params[:ca_path] = @ca_path if @ca_path
+      params[:cert_store] = @cert_store if @cert_store
+      ip_address = IPV4_ADDRESS.match?(address) || IPV6_ADDRESS.match?(address)
+      params[:verify_hostname] = false if ip_address
+      ctx.set_params(params)
+
+      sock = OpenSSL::SSL::SSLSocket.new(tcp_sock, ctx)
+      sock.sync_close = true
+      if !ip_address && sock.respond_to?(:hostname=)
+        sock.hostname = address
+      end
+      ssl_socket_connect(sock, @open_timeout)
+      if ctx.verify_mode != OpenSSL::SSL::VERIFY_NONE
+        sock.post_connection_check(address)
+      end
+      sock
+    end
+    private :ssl_connect_proxy
 
     tcp_socket_parameters = TCPSocket.instance_method(:initialize).parameters
     TCP_SOCKET_NEW_HAS_OPEN_TIMEOUT = if tcp_socket_parameters != [[:rest]]

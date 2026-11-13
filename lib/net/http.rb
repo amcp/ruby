@@ -1713,8 +1713,7 @@ module Net   #:nodoc:
       if use_ssl?
         if proxy?
           if @proxy_use_ssl
-            proxy_sock = OpenSSL::SSL::SSLSocket.new(s)
-            ssl_socket_connect(proxy_sock, @open_timeout)
+            proxy_sock = ssl_connect_proxy(s, conn_addr)
           else
             proxy_sock = s
           end
@@ -1805,6 +1804,39 @@ module Net   #:nodoc:
       raise
     end
     private :connect
+
+    # TLS to the proxy is a different hop from TLS to the origin.
+    # SSLSocket.new(io) with no context uses VERIFY_NONE, so the proxy
+    # certificate was never checked and Proxy-Authorization was written
+    # on that unverified session. The origin verify_mode is not copied
+    # here: VERIFY_NONE for the origin must not turn verification off
+    # for the proxy. ca_file, ca_path, and cert_store are copied so a
+    # caller-supplied trust anchor still applies to the proxy.
+    def ssl_connect_proxy(tcp_sock, address)
+      ctx = OpenSSL::SSL::SSLContext.new
+      params = {verify_mode: OpenSSL::SSL::VERIFY_PEER}
+      params[:ca_file] = @ca_file if @ca_file
+      params[:ca_path] = @ca_path if @ca_path
+      params[:cert_store] = @cert_store if @cert_store
+      ip_address = IPV4_ADDRESS.match?(address) || IPV6_ADDRESS.match?(address)
+      # An IP literal is not a valid SNI name (RFC 6066). Leaving
+      # verify_hostname on makes OpenSSL warn. The identity is still
+      # checked by post_connection_check below.
+      params[:verify_hostname] = false if ip_address
+      ctx.set_params(params)
+
+      sock = OpenSSL::SSL::SSLSocket.new(tcp_sock, ctx)
+      sock.sync_close = true
+      if !ip_address && sock.respond_to?(:hostname=)
+        sock.hostname = address
+      end
+      ssl_socket_connect(sock, @open_timeout)
+      if ctx.verify_mode != OpenSSL::SSL::VERIFY_NONE
+        sock.post_connection_check(address)
+      end
+      sock
+    end
+    private :ssl_connect_proxy
 
     tcp_socket_parameters = TCPSocket.instance_method(:initialize).parameters
     TCP_SOCKET_NEW_HAS_OPEN_TIMEOUT = if tcp_socket_parameters != [[:rest]]
