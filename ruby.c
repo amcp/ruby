@@ -53,6 +53,7 @@
 #include "internal/loadpath.h"
 #include "internal/missing.h"
 #include "internal/object.h"
+#include "internal/process.h"
 #include "internal/thread.h"
 #include "internal/ruby_parser.h"
 #include "internal/variable.h"
@@ -755,7 +756,11 @@ ruby_init_loadpath(void)
 
     load_path = rb_root_box()->load_path;
 
-    ruby_push_include(getenv("RUBYLIB"), identical_path);
+    /* A setid process must not take code paths from the caller's
+     * environment. -I and -r are already rejected. RUBYLIB is the
+     * other way to prepend directories to $LOAD_PATH. */
+    if (!rb_process_setid_p())
+        ruby_push_include(getenv("RUBYLIB"), identical_path);
 
     id_initial_load_path_mark = INITIAL_LOAD_PATH_MARK;
     while (*paths) {
@@ -3137,13 +3142,9 @@ ruby_set_script_name(VALUE name)
 static void
 init_ids(ruby_cmdline_options_t *opt)
 {
-    rb_uid_t uid = getuid();
-    rb_uid_t euid = geteuid();
-    rb_gid_t gid = getgid();
-    rb_gid_t egid = getegid();
-
-    if (uid != euid) opt->setids |= 1;
-    if (egid != gid) opt->setids |= 2;
+    /* Same predicate as RUBYLIB and RubyGems: real/effective mismatch,
+     * saved-id mismatch, and issetugid. Not merely euid == 0. */
+    opt->setids |= rb_process_setid_bits();
 }
 
 #undef forbid_setid

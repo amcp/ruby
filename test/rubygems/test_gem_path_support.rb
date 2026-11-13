@@ -12,6 +12,21 @@ class TestGemPathSupport < Gem::TestCase
     ENV["GEM_PATH"] = [@tempdir, "something"].join(File::PATH_SEPARATOR)
   end
 
+  def test_initialize_ignores_gem_environment_when_setid
+    Gem.stub(:running_with_setid?, true) do
+      plain = Gem::PathSupport.new({})
+      ps = Gem::PathSupport.new(
+        "GEM_HOME" => "#{@tempdir}/from-env",
+        "GEM_PATH" => "#{@tempdir}/from-env",
+        "GEM_SPEC_CACHE" => "#{@tempdir}/cache",
+      )
+
+      assert_equal plain.home, ps.home
+      assert_equal plain.path, ps.path
+      assert_equal plain.spec_cache_dir, ps.spec_cache_dir
+    end
+  end
+
   def test_initialize
     ps = Gem::PathSupport.new ENV
 

@@ -3763,6 +3763,62 @@ recv_child_error(int fd, int *errp, char *errmsg, size_t errmsg_buflen)
     return size != 0;
 }
 
+/*
+ * Distinguish a setid process from one that is merely running as root.
+ * has_privilege() also treats euid == 0 as privileged, because that
+ * matters for choosing vfork. That is the wrong test for whether the
+ * environment may choose code: a normal root shell must still honor
+ * RUBYLIB. This predicate matches the setid cases has_privilege cares
+ * about besides root: real and effective ids differ, saved and
+ * effective ids differ, or issetugid(2) is set.
+ *
+ * getresuid failure is treated as setid. The caller is about to decide
+ * whether to trust the environment.
+ */
+int
+rb_process_setid_bits(void)
+{
+    int bits = 0;
+
+    if (getuid() != geteuid()) bits |= 1;
+    if (getgid() != getegid()) bits |= 2;
+
+#if defined(HAVE_ISSETUGID)
+    /* Sticky on the platforms that have it, including after the
+     * process has dropped the effective id back to the real id. */
+    if (issetugid()) bits |= 1;
+#endif
+
+#if defined(HAVE_GETRESUID)
+    {
+        rb_uid_t ruid, euid, suid;
+        if (getresuid(&ruid, &euid, &suid) == -1 || ruid != euid || suid != euid)
+            bits |= 1;
+    }
+#endif
+#if defined(HAVE_GETRESGID)
+    {
+        rb_gid_t rgid, egid, sgid;
+        if (getresgid(&rgid, &egid, &sgid) == -1 || rgid != egid || sgid != egid)
+            bits |= 2;
+    }
+#endif
+
+    return bits;
+}
+
+int
+rb_process_setid_p(void)
+{
+    return rb_process_setid_bits() != 0;
+}
+
+static VALUE
+proc_setid_p(VALUE _)
+{
+    return RBOOL(rb_process_setid_p());
+}
+
 #ifdef HAVE_WORKING_VFORK
 #if !defined(HAVE_GETRESUID) && defined(HAVE_GETUIDX)
 /* AIX 7.1 */
@@ -9380,6 +9436,7 @@ InitVM_process(void)
 #endif
 #endif
 
+    rb_define_module_function(rb_mProcess, "setid?", proc_setid_p, 0);
     rb_define_module_function(rb_mProcess, "uid", proc_getuid, 0);
     rb_define_module_function(rb_mProcess, "uid=", proc_setuid, 1);
     rb_define_module_function(rb_mProcess, "gid", proc_getgid, 0);

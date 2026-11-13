@@ -86,6 +86,11 @@ VALUE rb_getpwdirnam_for_login(VALUE login);  /* read as: "get pwd db home dir b
 VALUE rb_getpwdiruid(void);                   /* read as: "get pwd db home dir for getuid()" */
 #endif
 
+/* Bit 1: user id mismatch or issetugid. Bit 2: group id mismatch.
+ * euid == 0 by itself is not a mismatch. */
+int rb_process_setid_bits(void);
+int rb_process_setid_p(void);
+
 RUBY_SYMBOL_EXPORT_BEGIN
 /* process.c (export) */
 int rb_exec_async_signal_safe(const struct rb_execarg *e, char *errmsg, size_t errmsg_buflen);

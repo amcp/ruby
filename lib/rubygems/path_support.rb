@@ -24,6 +24,17 @@ class Gem::PathSupport
   # hashtable, or defaults to ENV, the system environment.
   #
   def initialize(env)
+    # Gem.load_plugins loads Ruby from each directory on the gem path.
+    # A setid process must not let the caller choose those directories.
+    if Gem.running_with_setid?
+      stripped = {}
+      env.each_pair do |key, value|
+        next if key == "GEM_HOME" || key == "GEM_PATH" || key == "GEM_SPEC_CACHE"
+        stripped[key] = value
+      end
+      env = stripped
+    end
+
     @home = normalize_home_dir(env["GEM_HOME"] || Gem.default_dir)
     @path = split_gem_path env["GEM_PATH"], @home
 

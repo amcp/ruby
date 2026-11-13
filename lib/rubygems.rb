@@ -381,6 +381,15 @@ module Gem
     Zlib::Deflate.deflate data
   end
 
+  # True when this process must not take code paths from the
+  # environment. Process.setid? is the interpreter's check: real and
+  # effective ids differ, saved and effective ids differ, or issetugid
+  # is set. Other Ruby implementations have no such method; they keep
+  # the historical behavior of honoring the environment.
+  def self.running_with_setid?
+    Process.respond_to?(:setid?) && Process.setid?
+  end
+
   # Retrieve the PathSupport object that RubyGems uses to
   # lookup files.
 
@@ -1519,4 +1528,4 @@ eval File.read(path), nil, file
 # ([Bug #19089]). Ruby 4.1 autoloads them ([Feature #21951]) and deletes this
 # variable while loading RubyGems, so this can go once 4.1 is the oldest
 # supported version.
-require ENV["BUNDLER_SETUP"] if ENV["BUNDLER_SETUP"] && !defined?(Bundler)
+require ENV["BUNDLER_SETUP"] if ENV["BUNDLER_SETUP"] && !defined?(Bundler) && !Gem.running_with_setid?

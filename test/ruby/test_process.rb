@@ -197,6 +197,12 @@ class TestProcess < Test::Unit::TestCase
     io2.close
   end
 
+  def test_setid_p
+    # A normal process, including one running as root, is not setid.
+    # The true branch needs a real setid binary and is not run here.
+    assert_equal(false, Process.setid?)
+  end
+
   def test_execopts_rlimit
     return unless rlimit_exist?
     assert_raise(ArgumentError) { system(*TRUECOMMAND, :rlimit_foo=>0) }
