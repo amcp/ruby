@@ -73,8 +73,10 @@ class Dir
   # If a block is given,
   # it is yielded with the path of the directory.
   # The directory and its contents are removed
-  # using FileUtils.remove_entry with force before Dir.mktmpdir returns.
+  # using FileUtils.remove_entry_secure before Dir.mktmpdir returns.
   # The value of the block is returned.
+  # Removal is refused when the parent directory is world writable and
+  # not sticky, including when the caller passed that directory as +tmpdir+.
   #
   #  Dir.mktmpdir {|dir|
   #    # use the directory...
@@ -91,7 +93,7 @@ class Dir
   #    open("#{dir}/foo", "w") { something using the file }
   #  ensure
   #    # remove the directory.
-  #    FileUtils.remove_entry dir
+  #    FileUtils.remove_entry_secure dir
   #  end
   #
   def self.mktmpdir(prefix_suffix=nil, *rest, **options, &block)
@@ -104,14 +106,17 @@ class Dir
       begin
         yield path.dup
       ensure
-        unless base
-          base = File.dirname(path)
-          stat = File.stat(base)
-          if stat.world_writable? and !stat.sticky?
-            raise ArgumentError, "parent directory is world writable but not sticky: #{base}"
-          end
+        # The check used to run only for the default base. An explicit
+        # base is the case where the parent may be world writable
+        # without the sticky bit, which is when remove_entry follows a
+        # swapped symlink. remove_entry_secure's own refusal is swallowed
+        # when force is true, so refuse here and do not delete.
+        base = File.dirname(path) unless base
+        stat = File.stat(base) rescue nil
+        if stat && stat.world_writable? && !stat.sticky?
+          raise ArgumentError, "parent directory is world writable but not sticky: #{base}"
         end
-        FileUtils.remove_entry path, true
+        FileUtils.remove_entry_secure path, true
       end
     else
       path

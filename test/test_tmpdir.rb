@@ -31,14 +31,24 @@ class TestTmpdir < Test::Unit::TestCase
           assert_not_equal(tmpdir, assert_warn(/\A#{e} is not writable/) {Dir.tmpdir})
           File.chmod(0777, tmpdir)
           assert_not_equal(tmpdir, assert_warn(/\A#{e} is world-writable/) {Dir.tmpdir})
-          newdir = Dir.mktmpdir("d", tmpdir) do |dir|
-            assert_file.directory? dir
-            assert_equal(tmpdir, File.dirname(dir))
-            dir
+          created = nil
+          assert_raise(ArgumentError) do
+            Dir.mktmpdir("d", tmpdir) do |dir|
+              created = dir
+              assert_file.directory? dir
+              assert_equal(tmpdir, File.dirname(dir))
+            end
           end
-          assert_file.not_exist?(newdir)
+          assert_file.directory?(created)
+          File.chmod(0700, tmpdir)
+          FileUtils.remove_entry_secure(created)
           File.chmod(01777, tmpdir)
           assert_equal(tmpdir, Dir.tmpdir)
+          removed = Dir.mktmpdir("d", tmpdir) do |dir|
+            assert_file.directory? dir
+            dir
+          end
+          assert_file.not_exist?(removed)
           ENV[e] = nil
         end
       ensure
@@ -75,6 +85,35 @@ class TestTmpdir < Test::Unit::TestCase
     Dir.mktmpdir(nil) {|d|
       assert_kind_of(String, d)
     }
+  end
+
+  def test_mktmpdir_explicit_base_removed
+    Dir.mktmpdir do |parent|
+      path = nil
+      Dir.mktmpdir(nil, parent) do |dir|
+        path = dir
+        assert_file.directory?(dir)
+      end
+      assert_file.not_exist?(path)
+    end
+  end
+
+  def test_mktmpdir_explicit_base_refuses_nonsticky_world_writable
+    Dir.mktmpdir do |parent|
+      base = File.join(parent, "base")
+      Dir.mkdir(base)
+      File.chmod(0777, base)
+      stat = File.stat(base)
+      omit "platform did not apply a non-sticky world-writable mode" unless stat.world_writable? && !stat.sticky?
+      created = nil
+      assert_raise(ArgumentError) do
+        Dir.mktmpdir(nil, base) do |dir|
+          created = dir
+        end
+      end
+      assert_file.directory?(created)
+      File.chmod(0700, base)
+    end
   end
 
   def test_mktmpdir_tolerates_removed_directory
