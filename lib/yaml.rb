@@ -42,9 +42,16 @@ YAML = Psych # :nodoc:
 #
 # == Security
 #
-# Do not use YAML to load untrusted data. Doing so is unsafe and could allow
-# malicious input to execute arbitrary code inside your application. Please see
-# doc/security.rdoc for more information.
+# +YAML.load+ and +YAML.safe_load+ deserialize through +Psych.safe_load+.
+# The primitive classes are permitted. +YAML.load+ also permits +Symbol+.
+# Aliases are rejected unless <tt>aliases: true</tt> is passed.
+#
+# +YAML.unsafe_load+ and +YAML.unsafe_load_file+ build arbitrary Ruby
+# objects. Do not pass untrusted data to them.
+#
+# On the safe loader, a +permitted_classes+ entry whose +_load+ runs code
+# runs that code, and <tt>aliases: true</tt> allows shared and recursive
+# structures. See doc/security/security.rdoc.
 #
 # == History
 #

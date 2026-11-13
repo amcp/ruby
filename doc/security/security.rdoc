@@ -32,18 +32,30 @@ manually. Never deserialize to a user specified class.
 
 == YAML
 
-YAML is a popular human readable data serialization format used by many Ruby
-programs for configuration and database persistence of Ruby object trees.
+YAML is a human readable data serialization format. The +YAML+ module is an
+alias of +Psych+.
 
-Similar to +Marshal+, it is able to deserialize into arbitrary Ruby classes.
-For example, the following YAML data will create an +ERB+ object when
-deserialized, using the +unsafe_load+ method:
++YAML.load+ and +YAML.safe_load+ deserialize through +Psych.safe_load+.
+That loader accepts +true+, +false+, +nil+, numbers, strings, arrays, and
+hashes. +YAML.load+ also accepts +Symbol+. Both reject aliases unless the
+caller passes <tt>aliases: true</tt>. A class outside that set raises
++Psych::DisallowedClass+. +YAML.load_file+ follows +YAML.load+, and
++YAML.safe_load_file+ follows +YAML.safe_load+.
+
++YAML.unsafe_load+ and +Psych.unsafe_load+ build arbitrary Ruby objects.
++YAML.unsafe_load_file+ is that operation for a file. The following document
+creates an +ERB+ object when passed to +unsafe_load+. Rendering that object
+runs the template:
 
   !ruby/object:ERB
   src: puts `uname`
 
-Because of this, many of the security considerations applying to Marshal are
-also applicable to YAML. Do not use YAML to deserialize untrusted data.
+Do not pass untrusted data to +unsafe_load+ or +unsafe_load_file+.
+
++permitted_classes+ on the safe loader adds classes to the allowed set. A
+class whose +_load+ runs code runs that code for the caller.
+<tt>aliases: true</tt> lets the document build shared and recursive
+structures. Each of those options removes a limit of the safe loader.
 
 == Symbols
 
