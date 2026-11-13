@@ -282,6 +282,19 @@ class TestProcess < Test::Unit::TestCase
     end;
   end
 
+  def test_execopts_rlimit_bignum_converted_before_spawn
+    return unless rlimit_exist?
+    # 2**62 does not fit in a Fixnum and does fit in a 64-bit rlim_t.
+    # The value has to be converted before vfork. A RangeError here
+    # would mean the child converted it.
+    begin
+      system(RUBY, "-e", "", rlimit_nofile: 2**62)
+    rescue SystemCallError
+    rescue RangeError
+      flunk "rlimit Bignum was converted in the child"
+    end
+  end
+
   def test_overwrite_ENV
     assert_separately([],"#{<<~"begin;"}\n#{<<~"end;"}")
     BUG = "[ruby-core:105223] [Bug #18164]"

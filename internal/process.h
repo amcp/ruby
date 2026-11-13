@@ -27,6 +27,7 @@
 
 struct waitpid_state;
 struct rb_process_status;
+struct rb_exec_rlimit;
 struct rb_execarg {
     union {
         struct {
@@ -60,7 +61,9 @@ struct rb_execarg {
     struct rb_process_status *status;
     struct waitpid_state *waitpid_state; /* for async process management */
     rb_pid_t pgroup_pgid; /* asis(-1), new pgroup(0), specified pgroup (0<V). */
-    VALUE rlimit_limits; /* Qfalse or [[rtype, softlim, hardlim], ...] */
+    /* Converted in the parent. The child after vfork only calls setrlimit. */
+    struct rb_exec_rlimit *rlimits;
+    int nrlimits;
     mode_t umask_mask;
     rb_uid_t uid;
     rb_gid_t gid;

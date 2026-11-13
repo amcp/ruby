@@ -54,6 +54,13 @@
 # include <sys/resource.h>
 #endif
 
+#if defined(HAVE_SETRLIMIT) && defined(NUM2RLIM)
+struct rb_exec_rlimit {
+    int rtype;
+    struct rlimit lim;
+};
+#endif
+
 #ifdef HAVE_VFORK_H
 # include <vfork.h>
 #endif
@@ -1713,7 +1720,6 @@ mark_exec_arg(void *ptr)
     rb_gc_mark(eargp->envp_str);
     rb_gc_mark(eargp->envp_buf);
     rb_gc_mark(eargp->dup2_tmpbuf);
-    rb_gc_mark(eargp->rlimit_limits);
     rb_gc_mark(eargp->fd_dup2);
     rb_gc_mark(eargp->fd_close);
     rb_gc_mark(eargp->fd_open);
@@ -1726,12 +1732,30 @@ mark_exec_arg(void *ptr)
 static size_t
 memsize_exec_arg(const void *ptr)
 {
-    return sizeof(struct rb_execarg);
+    const struct rb_execarg *eargp = ptr;
+    size_t size = sizeof(struct rb_execarg);
+#if defined(HAVE_SETRLIMIT) && defined(NUM2RLIM)
+    size += (size_t)eargp->nrlimits * sizeof(struct rb_exec_rlimit);
+#else
+    (void)eargp;
+#endif
+    return size;
+}
+
+static void
+free_exec_arg(void *ptr)
+{
+    struct rb_execarg *eargp = ptr;
+    /* The GC frees the struct. RUBY_TYPED_EMBEDDABLE plus
+     * RUBY_TYPED_THREAD_SAFE_FREE xfree the unembedded body after dfree.
+     * Freeing it here would be a double free. */
+    ruby_xfree(eargp->rlimits);
+    eargp->rlimits = NULL;
 }
 
 static const rb_data_type_t exec_arg_data_type = {
     "exec_arg",
-    {mark_exec_arg, RUBY_TYPED_DEFAULT_FREE, memsize_exec_arg},
+    {mark_exec_arg, free_exec_arg, memsize_exec_arg},
     0, 0, RUBY_TYPED_THREAD_SAFE_FREE | RUBY_TYPED_EMBEDDABLE
 };
 
@@ -1970,12 +1994,11 @@ static int rlimit_type_by_sym(VALUE key);
 static void
 rb_execarg_addopt_rlimit(struct rb_execarg *eargp, int rtype, VALUE val)
 {
-    VALUE ary = eargp->rlimit_limits;
     VALUE tmp, softlim, hardlim;
-    if (eargp->rlimit_limits == Qfalse)
-        ary = eargp->rlimit_limits = hide_obj(rb_ary_new());
-    else
-        ary = eargp->rlimit_limits;
+    struct rlimit lim;
+    struct rb_exec_rlimit *slot;
+    size_t n;
+
     tmp = rb_check_array_type(val);
     if (!NIL_P(tmp)) {
         if (RARRAY_LEN(tmp) == 1)
@@ -1991,10 +2014,17 @@ rb_execarg_addopt_rlimit(struct rb_execarg *eargp, int rtype, VALUE val)
     else {
         softlim = hardlim = rb_to_int(val);
     }
-    (void)NUM2RLIM(softlim);
-    (void)NUM2RLIM(hardlim);
-    tmp = hide_obj(rb_ary_new3(3, INT2NUM(rtype), softlim, hardlim));
-    rb_ary_push(ary, tmp);
+    /* Convert before fork. NUM2RLIM of a Bignum can allocate and raise,
+     * which is not safe in the child after vfork. */
+    lim.rlim_cur = NUM2RLIM(softlim);
+    lim.rlim_max = NUM2RLIM(hardlim);
+
+    n = (size_t)eargp->nrlimits + 1;
+    eargp->rlimits = ruby_xrealloc(eargp->rlimits, n * sizeof(struct rb_exec_rlimit));
+    slot = &eargp->rlimits[eargp->nrlimits];
+    slot->rtype = rtype;
+    slot->lim = lim;
+    eargp->nrlimits = (int)n;
 }
 #endif
 
@@ -2412,6 +2442,7 @@ rb_exec_fillarg(VALUE prog, int argc, VALUE *argv, VALUE env, VALUE opthash, VAL
     struct rb_execarg *eargp = rb_execarg_get(execarg_obj);
     char fbuf[MAXPATHLEN];
 
+    ruby_xfree(eargp->rlimits);
     MEMZERO(eargp, struct rb_execarg, 1);
 
     if (!NIL_P(opthash)) {
@@ -3329,38 +3360,48 @@ run_exec_pgroup(const struct rb_execarg *eargp, struct rb_execarg *sargp, char *
 #endif
 
 #if defined(HAVE_SETRLIMIT) && defined(RLIM2NUM)
-/* This function should be async-signal-safe when sargp is NULL.  Hopefully it is. */
+/* Async-signal-safe when sargp is NULL: the parent already stored rlim_t.
+ * sargp is non-NULL only where fork is unavailable. There the old limits
+ * are saved in a C array so they can be restored without NUM2RLIM. */
 static int
-run_exec_rlimit(VALUE ary, struct rb_execarg *sargp, char *errmsg, size_t errmsg_buflen)
+run_exec_rlimit(const struct rb_execarg *eargp, struct rb_execarg *sargp, char *errmsg, size_t errmsg_buflen)
 {
-    rb_len_t i;
-    for (i = 0; i < RARRAY_LEN(ary); i++) {
-        VALUE elt = RARRAY_AREF(ary, i);
-        int rtype = NUM2INT(RARRAY_AREF(elt, 0));
-        struct rlimit rlim;
+    int i;
+    struct rb_exec_rlimit *saved = NULL;
+
+    if (eargp->nrlimits == 0)
+        return 0;
+
+    if (sargp) {
+        saved = ruby_xcalloc((size_t)eargp->nrlimits, sizeof(struct rb_exec_rlimit));
+        sargp->rlimits = saved;
+        sargp->nrlimits = eargp->nrlimits;
+    }
+
+    for (i = 0; i < eargp->nrlimits; i++) {
+        int rtype = eargp->rlimits[i].rtype;
         if (sargp) {
-            VALUE tmp, newary;
-            if (getrlimit(rtype, &rlim) == -1) {
+            if (getrlimit(rtype, &saved[i].lim) == -1) {
                 ERRMSG("getrlimit");
                 return -1;
             }
-            tmp = hide_obj(rb_ary_new3(3, RARRAY_AREF(elt, 0),
-                                       RLIM2NUM(rlim.rlim_cur),
-                                       RLIM2NUM(rlim.rlim_max)));
-            if (sargp->rlimit_limits == Qfalse)
-                newary = sargp->rlimit_limits = hide_obj(rb_ary_new());
-            else
-                newary = sargp->rlimit_limits;
-            rb_ary_push(newary, tmp);
+            saved[i].rtype = rtype;
         }
-        rlim.rlim_cur = NUM2RLIM(RARRAY_AREF(elt, 1));
-        rlim.rlim_max = NUM2RLIM(RARRAY_AREF(elt, 2));
-        if (setrlimit(rtype, &rlim) == -1) { /* hopefully async-signal-safe */
+        if (setrlimit(rtype, &eargp->rlimits[i].lim) == -1) { /* async-signal-safe */
             ERRMSG("setrlimit");
             return -1;
         }
     }
     return 0;
+}
+
+static void
+rb_execarg_discard_rlimits(struct rb_execarg *sargp)
+{
+    if (!sargp) return;
+    ruby_xfree(sargp->rlimits);
+    sargp->rlimits = NULL;
+    sargp->nrlimits = 0;
 }
 #endif
 
@@ -3416,9 +3457,8 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
 #endif
 
 #if defined(HAVE_SETRLIMIT) && defined(RLIM2NUM)
-    obj = eargp->rlimit_limits;
-    if (obj != Qfalse) {
-        if (run_exec_rlimit(obj, sargp, errmsg, errmsg_buflen) == -1) /* hopefully async-signal-safe */
+    if (eargp->nrlimits > 0) {
+        if (run_exec_rlimit(eargp, sargp, errmsg, errmsg_buflen) == -1) /* async-signal-safe when sargp is NULL */
             return -1;
     }
 #endif
@@ -3542,6 +3582,9 @@ exec_async_signal_safe(const struct rb_execarg *eargp, char *errmsg, size_t errm
     int err;
 
     if (rb_execarg_run_options(eargp, sargp, errmsg, errmsg_buflen) < 0) { /* hopefully async-signal-safe */
+#if defined(HAVE_SETRLIMIT) && defined(RLIM2NUM)
+        rb_execarg_discard_rlimits(sargp);
+#endif
         return errno;
     }
 
@@ -3556,6 +3599,9 @@ exec_async_signal_safe(const struct rb_execarg *eargp, char *errmsg, size_t errm
     }
 #if !defined(HAVE_WORKING_FORK)
     rb_execarg_run_options(sargp, NULL, errmsg, errmsg_buflen);
+#endif
+#if defined(HAVE_SETRLIMIT) && defined(RLIM2NUM)
+    rb_execarg_discard_rlimits(sargp);
 #endif
 
     return err;
@@ -4490,6 +4536,9 @@ rb_spawn_process(struct rb_execarg *eargp, char *errmsg, size_t errmsg_buflen)
     prog = eargp->use_shell ? eargp->invoke.sh.shell_script : eargp->invoke.cmd.command_name;
 
     if (rb_execarg_run_options(eargp, &sarg, errmsg, errmsg_buflen) < 0) {
+#if defined(HAVE_SETRLIMIT) && defined(RLIM2NUM)
+        rb_execarg_discard_rlimits(&sarg);
+#endif
         return -1;
     }
 
@@ -4520,6 +4569,9 @@ rb_spawn_process(struct rb_execarg *eargp, char *errmsg, size_t errmsg_buflen)
     }
 
     rb_execarg_run_options(&sarg, NULL, errmsg, errmsg_buflen);
+#if defined(HAVE_SETRLIMIT) && defined(RLIM2NUM)
+    rb_execarg_discard_rlimits(&sarg);
+#endif
 #endif
 
     return pid;
