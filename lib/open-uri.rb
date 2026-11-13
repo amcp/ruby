@@ -112,6 +112,7 @@ module OpenURI
     :ssl_max_version => nil,
     :ftp_active_mode => false,
     :redirect => true,
+    :allow_private_redirect => false,
     :encoding => nil,
     :max_redirects => 64,
     :request_specific_fields => nil,
@@ -250,6 +251,12 @@ module OpenURI
         unless OpenURI.redirectable?(uri, redirect)
           raise "redirection forbidden: #{uri} -> #{redirect}"
         end
+        # An explicit private URL is fetched. A redirect from somewhere
+        # else onto a loopback, link-local, or private address is not,
+        # unless the caller passes :allow_private_redirect.
+        if !options[:allow_private_redirect] && OpenURI.private_redirect?(uri, redirect)
+          raise "redirection forbidden: #{uri} -> #{redirect}"
+        end
         if options.include? :http_basic_authentication
           # send authentication only for the URI directly specified.
           options = options.dup
@@ -281,6 +288,66 @@ module OpenURI
     # However this is ad hoc.  It should be extensible/configurable.
     uri1.scheme.downcase == uri2.scheme.downcase ||
     (/\A(?:http|ftp)\z/i =~ uri1.scheme && /\A(?:https?|ftp)\z/i =~ uri2.scheme)
+  end
+
+  # Addresses that are not a public destination. IPv4-mapped IPv6 is
+  # judged as the embedded IPv4 address.
+  def OpenURI.private_networks # :nodoc:
+    require "ipaddr"
+    @private_networks ||= [
+      IPAddr.new("0.0.0.0/8"),
+      IPAddr.new("10.0.0.0/8"),
+      IPAddr.new("100.64.0.0/10"),
+      IPAddr.new("127.0.0.0/8"),
+      IPAddr.new("169.254.0.0/16"),
+      IPAddr.new("172.16.0.0/12"),
+      IPAddr.new("192.168.0.0/16"),
+      IPAddr.new("224.0.0.0/4"),
+      IPAddr.new("240.0.0.0/4"),
+      IPAddr.new("::/128"),
+      IPAddr.new("::1/128"),
+      IPAddr.new("fc00::/7"),
+      IPAddr.new("fe80::/10"),
+      IPAddr.new("ff00::/8"),
+    ].freeze
+  end
+
+  def OpenURI.private_ip?(ip) # :nodoc:
+    require "ipaddr"
+    addr = ip.is_a?(IPAddr) ? ip : IPAddr.new(ip.to_s)
+    addr = addr.native if addr.ipv4_mapped?
+    private_networks.any? {|net| net.include?(addr) }
+  rescue IPAddr::Error
+    true
+  end
+
+  # Resolved addresses for +uri+, or nil when the name cannot be resolved.
+  # nil fails closed at the redirect check.
+  def OpenURI.destination_addresses(uri) # :nodoc:
+    host = uri.host
+    return nil if !host || host.empty?
+    host = host[1..-2] if host.start_with?("[") && host.end_with?("]")
+    require "socket"
+    require "ipaddr"
+    Addrinfo.getaddrinfo(host, nil, Socket::AF_UNSPEC, Socket::SOCK_STREAM).map {|ai|
+      IPAddr.new(ai.ip_address)
+    }.uniq
+  rescue SocketError, SystemCallError, IPAddr::Error
+    nil
+  end
+
+  # True when following +redirect+ must be refused. A destination is
+  # refused when any resolved address is loopback, link-local, private,
+  # or otherwise non-public, unless every address of +origin+ is also
+  # non-public. Resolution failure is refused. An explicit fetch of a
+  # private URL is still allowed; this check is only the redirect step.
+  def OpenURI.private_redirect?(origin, redirect) # :nodoc:
+    dest = destination_addresses(redirect)
+    return true if dest.nil? || dest.empty?
+    return false unless dest.any? {|addr| private_ip?(addr) }
+    origin_addrs = destination_addresses(origin)
+    return true if origin_addrs.nil? || origin_addrs.empty?
+    !origin_addrs.all? {|addr| private_ip?(addr) }
   end
 
   def OpenURI.open_http(buf, target, proxy, options) # :nodoc:
@@ -778,6 +845,16 @@ module OpenURI
     #
     #  Number of HTTP redirects allowed before OpenURI::TooManyRedirects is raised.
     #  The default is 64.
+    #
+    # [:allow_private_redirect]
+    #  Synopsis:
+    #    :allow_private_redirect=>bool
+    #
+    #  +:allow_private_redirect+ is false by default. A redirect from a
+    #  host that is not entirely loopback, link-local, or private onto
+    #  such an address is refused after the name is resolved. The initial
+    #  URL is fetched even when it is private, so <tt>URI.open("http://127.0.0.1/")</tt>
+    #  still works. Pass true to follow those redirects.
     #
     # [:request_specific_fields]
     #  Synopsis:

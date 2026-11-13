@@ -212,6 +212,82 @@ class TestOpenURI < Test::Unit::TestCase
     }
   end
 
+  def test_private_ip
+    assert OpenURI.private_ip?("127.0.0.1")
+    assert OpenURI.private_ip?("10.1.2.3")
+    assert OpenURI.private_ip?("172.16.5.5")
+    assert OpenURI.private_ip?("192.168.0.1")
+    assert OpenURI.private_ip?("169.254.169.254")
+    assert OpenURI.private_ip?("100.64.0.1")
+    assert OpenURI.private_ip?("0.1.2.3")
+    assert OpenURI.private_ip?("224.0.0.1")
+    assert OpenURI.private_ip?("::1")
+    assert OpenURI.private_ip?("fc00::1")
+    assert OpenURI.private_ip?("fe80::1")
+    assert OpenURI.private_ip?("::ffff:127.0.0.1")
+    assert !OpenURI.private_ip?("8.8.8.8")
+    assert !OpenURI.private_ip?("1.1.1.1")
+    assert !OpenURI.private_ip?("2001:4860:4860::8888")
+  end
+
+  def test_private_redirect_literals
+    loopback = URI.parse("http://127.0.0.1/a")
+    other = URI.parse("http://127.0.0.2/b")
+    public = URI.parse("http://8.8.8.8/c")
+    assert !OpenURI.private_redirect?(loopback, other)
+    assert OpenURI.private_redirect?(public, loopback)
+    assert !OpenURI.private_redirect?(public, URI.parse("http://1.1.1.1/"))
+  end
+
+  def test_private_redirect_fails_closed_without_addresses
+    public = URI.parse("http://8.8.8.8/")
+    missing = Struct.new(:host).new("")
+    assert OpenURI.private_redirect?(public, missing)
+    assert OpenURI.private_redirect?(missing, URI.parse("http://127.0.0.1/"))
+  end
+
+  def test_open_refuses_redirect_to_private_address
+    require "ipaddr"
+    with_http {|srv, url|
+      srv.mount_proc("/r/", lambda {|req, res|
+        res.status = 301
+        res["location"] = "http://127.0.0.1:9/secret"
+        res.body = "no"
+      })
+      # The local server is itself private. Present it as a public origin
+      # so the redirect check takes the path a public host would take.
+      addresses = lambda {|uri|
+        if uri.host == "127.0.0.1" && uri.port == 9
+          [IPAddr.new("127.0.0.1")]
+        else
+          [IPAddr.new("8.8.8.8")]
+        end
+      }
+      stub_singleton(OpenURI, :destination_addresses, addresses) do
+        err = assert_raise(RuntimeError) { URI.open("#{url}/r/") {} }
+        assert_match(/redirection forbidden/, err.message)
+      end
+      err = assert_raise(Errno::ECONNREFUSED) {
+        URI.open("#{url}/r/", allow_private_redirect: true) {}
+      }
+      assert_not_match(/redirection forbidden/, err.message)
+    }
+  end
+
+  def stub_singleton(obj, name, replacement)
+    metaclass = class << obj; self; end
+    backup = :"__stub_#{name}"
+    metaclass.send(:alias_method, backup, name)
+    metaclass.send(:define_method, name) do |*args|
+      replacement.respond_to?(:call) ? replacement.call(*args) : replacement
+    end
+    yield
+  ensure
+    metaclass.send(:undef_method, name)
+    metaclass.send(:alias_method, name, backup)
+    metaclass.send(:undef_method, backup)
+  end
+
   def test_redirect
     with_http {|srv, url|
       srv.mount_proc("/r1/", lambda {|req, res| res.status = 301; res["location"] = "#{url}/r2"; res.body = "r1" } )
