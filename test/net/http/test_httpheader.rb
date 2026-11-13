@@ -89,6 +89,17 @@ class HTTPHeaderTest < Test::Unit::TestCase
     assert_raise(ArgumentError){ @c['foo'] = ["a\nb"] }
   end
 
+  def test_field_value_rejects_control_characters
+    ["a\x00b", "\x7f", "\x01", "a\tb"].each do |value|
+      assert_raise(ArgumentError) { @c.initialize_http_header("foo" => value) }
+      assert_raise(ArgumentError) { @c["foo"] = value }
+      assert_raise(ArgumentError) { @c["foo"] = [value] }
+      @c["foo"] = "ok"
+      assert_raise(ArgumentError) { @c.add_field("foo", value) }
+      assert_equal "ok", @c["foo"]
+    end
+  end
+
   def test_set_field_too_long_key
     assert_raise(ArgumentError){ @c['x' * (Net::HTTPHeader::MAX_KEY_LENGTH + 1)] = 'a' }
     assert_nothing_raised{ @c['x' * Net::HTTPHeader::MAX_KEY_LENGTH] = 'a' }

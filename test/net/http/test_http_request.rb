@@ -101,6 +101,20 @@ class HTTPRequestTest < Test::Unit::TestCase
                          'Bug #7831 - do not decode content if the user overrides'
   end if Net::HTTP::HAVE_ZLIB
 
+  def test_request_line_rejects_control_characters
+    ["/\x00", "/a\x01b", "/a\x7fb", "/a\tb"].each do |path|
+      req = Net::HTTP::Get.new(path)
+      err = assert_raise(ArgumentError) { req.send(:write_header, nil, "1.1", req.path) }
+      assert_match(/control characters/, err.message)
+    end
+    req = Net::HTTP::Get.new("/ok")
+    written = nil
+    sock = Object.new
+    sock.define_singleton_method(:write) {|buf| written = buf }
+    req.send(:write_header, sock, "1.1", req.path)
+    assert_match(%r{\AGET /ok HTTP/1\.1\r\n}, written)
+  end
+
   def test_update_uri
     req = Net::HTTP::Get.new(URI.parse("http://203.0.113.1"))
     req.update_uri("test", 8080, false)

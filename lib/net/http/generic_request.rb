@@ -336,8 +336,8 @@ class Net::HTTPGenericRequest
     boundary = opt[:boundary]
     require 'securerandom' unless defined?(SecureRandom)
     boundary ||= SecureRandom.urlsafe_base64(40)
-    if /[\r\n]/.match?(boundary.to_s)
-      raise ArgumentError, "multipart boundary cannot include CR/LF"
+    if /[\x00-\x1f\x7f]/n.match?(boundary.to_s.b)
+      raise ArgumentError, "multipart boundary cannot include control characters"
     end
     chunked_p = chunked?
 
@@ -353,8 +353,8 @@ class Net::HTTPGenericRequest
       if filename
         filename = quote_string(filename, charset)
         type = (h[:content_type] || 'application/octet-stream').to_s
-        if /[\r\n]/.match?(type)
-          raise ArgumentError, "field content type cannot include CR/LF"
+        if /[\x00-\x1f\x7f]/n.match?(type.b)
+          raise ArgumentError, "field content type cannot include control characters"
         end
         buf << "Content-Disposition: form-data; " \
           "name=\"#{key}\"; filename=\"#{filename}\"\r\n" \
@@ -390,8 +390,8 @@ class Net::HTTPGenericRequest
 
   def quote_string(str, charset)
     str = str.encode(charset, fallback:->(c){'&#%d;'%c.encode("UTF-8").ord}) if charset
-    if /[\r\n]/.match?(str)
-      raise ArgumentError, "multipart field name or filename cannot include CR/LF"
+    if /[\x00-\x1f\x7f]/n.match?(str.b)
+      raise ArgumentError, "multipart field name or filename cannot include control characters"
     end
     str.gsub(/[\\"]/, '\\\\\&')
   end
@@ -423,8 +423,8 @@ class Net::HTTPGenericRequest
 
   def write_header(sock, ver, path)
     reqline = "#{@method} #{path} HTTP/#{ver}"
-    if /[\r\n]/ =~ reqline
-      raise ArgumentError, "A Request-Line must not contain CR or LF"
+    if /[\x00-\x1f\x7f]/n.match?(reqline.b)
+      raise ArgumentError, "A Request-Line must not contain control characters"
     end
     buf = +''
     buf << reqline << "\r\n"

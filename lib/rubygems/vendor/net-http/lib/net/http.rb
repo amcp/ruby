@@ -1718,6 +1718,12 @@ module Gem::Net   #:nodoc:
                                       write_timeout: @write_timeout,
                                       continue_timeout: @continue_timeout,
                                       debug_output: @debug_output)
+          if /[\x00-\x1f\x7f]/n.match?("#{conn_address}:#{@port}".b)
+            raise ArgumentError, "address and port cannot include control characters"
+          end
+          if /[\x00-\x1f\x7f]/n.match?(@address.to_s.b)
+            raise ArgumentError, "address cannot include control characters"
+          end
           buf = +"CONNECT #{conn_address}:#{@port} HTTP/#{HTTPVersion}\r\n" \
             "Host: #{@address}:#{@port}\r\n"
           if proxy_user

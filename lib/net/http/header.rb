@@ -197,8 +197,8 @@ module Net::HTTPHeader
         if value.to_s.bytesize > MAX_FIELD_LENGTH
           raise ArgumentError, "header #{key} has too long field value: #{value.bytesize} bytes (limit #{MAX_FIELD_LENGTH})"
         end
-        if value.count("\r\n") > 0
-          raise ArgumentError, "header #{key} has field value #{value.inspect}, this cannot include CR/LF"
+        if /[\x00-\x1f\x7f]/n.match?(value.to_s.b)
+          raise ArgumentError, "header #{key} has field value #{value.inspect}, this cannot include control characters"
         end
         @header[key.downcase.to_s] = [value]
       end
@@ -289,8 +289,8 @@ module Net::HTTPHeader
       if val.bytesize > MAX_FIELD_LENGTH
         raise ArgumentError, "header #{key} has too long field value: #{val.bytesize} bytes (limit #{MAX_FIELD_LENGTH})"
       end
-      if val.b.count("\r\n") > 0
-        raise ArgumentError, 'header field value cannot include CR/LF'
+      if /[\x00-\x1f\x7f]/n.match?(val.b)
+        raise ArgumentError, 'header field value cannot include control characters'
       end
       @header[key.downcase.to_s] = [val]
     end
@@ -305,8 +305,8 @@ module Net::HTTPHeader
       if val.bytesize > MAX_FIELD_LENGTH
         raise ArgumentError, "header #{key} has too long field value: #{val.bytesize} bytes (limit #{MAX_FIELD_LENGTH})"
       end
-      if /[\r\n]/n.match?(val.b)
-        raise ArgumentError, 'header field value cannot include CR/LF'
+      if /[\x00-\x1f\x7f]/n.match?(val.b)
+        raise ArgumentError, 'header field value cannot include control characters'
       end
       ary.push val
     end
